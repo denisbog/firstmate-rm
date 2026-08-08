@@ -1,0 +1,14 @@
+# firstmate-rm state
+state/
+
+# Node modules used by extensions
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~

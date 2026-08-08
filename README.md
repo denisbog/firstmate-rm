@@ -6,7 +6,6 @@ Spawn and monitor worker pi agents that implement changes in git projects, each 
 
 - **pi** — The pi coding agent CLI (`npm install -g @earendil-works/pi-coding-agent`)
 - **herdr** — Terminal multiplexer (https://herdr.dev)
-- **gh** — GitHub CLI (`gh auth login`)
 
 ## Quick Start
 
@@ -36,9 +35,9 @@ pi -e /path/to/firstmate-rm/.pi/extensions/rm-watch.ts
 │                 │       *.done-report   │  rm-<task-id>    │
 └────────┬────────┘                       └──────────────────┘
          │                                        │
-         │  spawns / monitors                     │  creates PR
+         │  spawns / monitors                     │  commits changes
          ▼                                        ▼
-   User interaction                        GitHub PR
+   User interaction                        Task branch
 ```
 
 ## Files
@@ -52,16 +51,16 @@ pi -e /path/to/firstmate-rm/.pi/extensions/rm-watch.ts
 | `bin/rm-status.sh` | Read/write status files |
 | `bin/rm-send.sh` | Send input to a worker pane |
 | `bin/rm-peek.sh` | Read output from a worker pane |
-| `bin/rm-pr.sh` | Create and check PRs |
-| `bin/rm-cleanup.sh` | Clean up after PR merge |
+| `bin/rm-pr.sh` | Show branch info for completed tasks |
+| `bin/rm-cleanup.sh` | Clean up workspace after task completion |
 | `.pi/extensions/rm-watch.ts` | Main agent extension (status watcher) |
-| `.pi/extensions/rm-worker-ext.ts` | Worker agent extension (status reporting) |
+| `lib/rm-worker-ext.ts` | Worker agent extension (status reporting, loaded explicitly) |
 
 ## Workflow
 
 1. **Spawn**: User asks for a change → main agent spawns a worker with `rm_spawn_worker`
 2. **Implement**: Worker pi agent works in a herdr workspace, reports status
 3. **Block**: If worker needs input → reports `blocked` → main agent presents question to user → relays answer
-4. **Complete**: Worker finishes → creates PR → reports `completed` with summary
-5. **Review** (optional): User can spawn a reviewer to comment on the PR
-6. **Merge**: User merges the PR → main agent verifies and cleans up
+4. **Complete**: Worker finishes → commits changes to the task branch → reports `completed` with summary
+5. **Push/Merge**: User inspects the worktree, pushes the branch, and merges manually (standard git)
+6. **Cleanup**: Main agent destroys the herdr workspace, removes status files, and prunes the worktree

@@ -32,7 +32,7 @@ const rmBin = join(rmHome, "bin");
 const workersDir = join(rmStateDir, "workers");
 
 // Known statuses and their visual meanings
-type WorkerStatus = "spawned" | "working" | "blocked" | "completed" | "failed" | "pr_created" | "pr_reviewed" | "unknown";
+type WorkerStatus = "spawned" | "working" | "blocked" | "completed" | "failed" | "unknown";
 
 interface WorkerState {
   taskId: string;
@@ -81,18 +81,7 @@ function readBlockingQuestion(taskId: string): string | null {
   return readFileSync(file, "utf8").trim();
 }
 
-// Helper: read the PR URL
-function readPrUrl(taskId: string): string | null {
-  const file = join(workersDir, `${taskId}.pr`);
-  if (!existsSync(file)) return null;
-  const content = readFileSync(file, "utf8");
-  for (const line of content.split("\n")) {
-    if (line.startsWith("pr_url=")) {
-      return line.slice(7).trim();
-    }
-  }
-  return null;
-}
+
 
 // Helper: list all known tasks
 function listTasks(): string[] {
@@ -205,12 +194,10 @@ export default function (pi: ExtensionAPI) {
           case "completed": {
             const lastMsg = readLastMessage(taskId);
             const report = readDoneReport(taskId);
-            const prUrl = readPrUrl(taskId);
-            const prText = prUrl ? `\nPR: ${prUrl}` : "";
             const reportText = report.length > 0 ? `\nReport: ${report}` : "";
             notifyAgent(
               pi,
-              `Worker "${taskId}" COMPLETED.${prText}${reportText}\n\nLast message:\n${lastMsg}`,
+              `Worker "${taskId}" COMPLETED.${reportText}\n\nLast message:\n${lastMsg}`,
               "info",
             );
             break;
@@ -223,16 +210,7 @@ export default function (pi: ExtensionAPI) {
             );
             break;
           }
-          case "pr_created": {
-            const prUrl = readPrUrl(taskId);
-            const prText = prUrl ? `\nPR: ${prUrl}` : "";
-            notifyAgent(
-              pi,
-              `Worker "${taskId}" created a PR.${prText}`,
-              "info",
-            );
-            break;
-          }
+
           case "working": {
             if (prevStatus === "spawned") {
               notifyAgent(
@@ -342,10 +320,8 @@ export default function (pi: ExtensionAPI) {
       for (const taskId of tasks) {
         const status = readStatus(taskId);
         const msg = readStatusMessage(taskId);
-        const prUrl = readPrUrl(taskId);
         let line = `  ${taskId}: ${status}`;
         if (msg) line += ` (${msg})`;
-        if (prUrl) line += ` PR: ${prUrl}`;
         lines.push(line);
       }
       ctx.ui.notify(`Workers:\n${lines.join("\n")}`, "info");
@@ -376,7 +352,6 @@ export default function (pi: ExtensionAPI) {
 
       const args_list: string[] = [taskId];
       if (projectDir) args_list.push(projectDir);
-      args_list.push("--force");
 
       const result = runBin("rm-cleanup.sh", args_list);
       if (result.ok) {
@@ -423,10 +398,8 @@ export default function (pi: ExtensionAPI) {
       for (const taskId of tasks) {
         const status = readStatus(taskId);
         const msg = readStatusMessage(taskId);
-        const prUrl = readPrUrl(taskId);
         let line = `  ${taskId}: ${status}`;
         if (msg) line += ` — ${msg}`;
-        if (prUrl) line += `\n    PR: ${prUrl}`;
         lines.push(line);
       }
       return { content: [{ type: "text", text: lines.join("\n") }], details: {} };
@@ -437,10 +410,10 @@ export default function (pi: ExtensionAPI) {
     name: "rm_check_worker",
     label: "Check worker",
     description: "Check the status and last message of a specific worker agent.",
-    promptSnippet: "Check a worker agent's current status, last message, and any details (blocking question, PR URL, done report).",
+    promptSnippet: "Check a worker agent's current status, last message, and any details (blocking question, done report).",
     promptGuidelines: [
       "Use this when a worker reports blocked or completed to see their question or results.",
-      "The response includes the status, last message, PR URL (if any), and done report (if completed).",
+      "The response includes the status, last message, blocking question, and done report (if completed).",
     ],
     parameters: Type.Object({
       taskId: Type.String({ description: "Task identifier to check" }),
@@ -458,7 +431,6 @@ export default function (pi: ExtensionAPI) {
       }
       const msg = readStatusMessage(taskId);
       const lastMsg = readLastMessage(taskId);
-      const prUrl = readPrUrl(taskId);
       const question = readBlockingQuestion(taskId);
       const report = readDoneReport(taskId);
 
@@ -473,9 +445,6 @@ export default function (pi: ExtensionAPI) {
       if (question) {
         parts.push(`Blocking question:\n${question}`);
       }
-      if (prUrl) {
-        parts.push(`PR URL: ${prUrl}`);
-      }
       if (report.length > 0 && report !== "(no report)") {
         parts.push(`Done report:\n${report}`);
       }
@@ -484,12 +453,12 @@ export default function (pi: ExtensionAPI) {
         parts.push("\nThis worker is blocked and waiting for your answer. Use rm_answer_worker to respond.");
       }
       if (status === "completed") {
-        parts.push("\nThis worker has completed its task. The user should review the results. Use the report and PR to assess the work.");
+        parts.push("\nThis worker has completed its task. The user should review the results and push/merge manually.");
       }
 
       return {
         content: [{ type: "text", text: parts.join("\n") }],
-        details: { taskId, status, message: msg, prUrl, blocked: !!question },
+        details: { taskId, status, message: msg, blocked: !!question },
       };
     },
   });
@@ -537,19 +506,17 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool?.({
     name: "rm_cleanup_task",
     label: "Cleanup task",
-    description: "Clean up a task's herdr workspace, status files, and local branch after the PR is merged. Only use after the PR has been merged by the user.",
-    promptSnippet: "Clean up all resources for a completed and merged task.",
+    description: "Clean up a task's herdr workspace, status files, and worktree after completion.",
+    promptSnippet: "Destroy the workspace and remove all status files for a finished task.",
     promptGuidelines: [
-      "This should only be called after the user confirms the PR was merged.",
-      "It destroys the herdr workspace, removes status files, and cleans up the local git branch.",
-      "Use the --force flag to skip PR merge check if needed.",
+      "This destroys the herdr workspace, removes status files, and prunes the worktree.",
+      "Only call this after the user confirms the changes have been dealt with.",
     ],
     parameters: Type.Object({
       taskId: Type.String({ description: "Task identifier to clean up" }),
-      force: Type.Optional(Type.Boolean({ description: "Skip PR merge check" })),
     }),
     execute: async (_toolCallId, params) => {
-      const { taskId, force } = params;
+      const { taskId } = params;
       console.error(`[RM-DEBUG] rm_cleanup_task params: ${JSON.stringify(params)}`);
       const herdrMeta = join(rmStateDir, "herdr", `${taskId}.meta`);
       let projectDir = "";
@@ -563,7 +530,6 @@ export default function (pi: ExtensionAPI) {
       }
       const args: string[] = [taskId];
       if (projectDir) args.push(projectDir);
-      if (force) args.push("--force");
 
       const result = runBin("rm-cleanup.sh", args);
       if (result.ok) {
