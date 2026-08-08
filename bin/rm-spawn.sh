@@ -58,8 +58,7 @@ generate_brief() {
     is_new=1  # no remote configured
   fi
 
-  if [ "$is_new" -eq 1 ]; then
-    cat > "$brief_dir/brief.md" <<BRIEFEOF
+  cat > "$brief_dir/brief.md" <<BRIEFEOF
 # Task: $task
 
 ## Description
@@ -69,8 +68,8 @@ $task_desc
 - Path: $(cd "$project" && pwd -P 2>/dev/null || echo "$project")
 - Name: $project_name
 - Current Branch: $branch
-- Default Branch: $default_branch
-- Project Status: **New** (freshly created — push directly to main)
+- Default Branch: $default_branch$([ "$is_new" -eq 1 ] && echo "
+- Project Status: **New** (freshly created)")
 
 ## Instructions
 
@@ -102,7 +101,6 @@ Your status files are written to \`$RM_STATUS_DIR/\` and the main
 agent picks them up automatically. You do not need to run shell scripts
 for status reporting — use the tools above.
 BRIEFEOF
-  fi
 
   printf '%s\n' "$brief_dir/brief.md"
 }
