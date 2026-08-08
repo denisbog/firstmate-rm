@@ -123,15 +123,41 @@ function runBin(script: string, args: string[]): { ok: boolean; stdout: string; 
   };
 }
 
-// Notify type for the main agent via followUp message.
-// sendUserMessage may be undefined (print/JSON mode) or return undefined.
-// Guard every call so a missing method never crashes the poll loop.
+// FollowUp queue guard: tracks whether a followUp is already pending so the
+// poll loop doesn't spam the agent with concurrent followUp messages.
+let followUpPending = false;
+let followUpTimeout: ReturnType<typeof setTimeout> | null = null;
+
+// Reset the followUp guard (called after delivery settles or on timeout).
+function resetFollowUpGuard() {
+  followUpPending = false;
+  if (followUpTimeout) {
+    clearTimeout(followUpTimeout);
+    followUpTimeout = null;
+  }
+}
+
+// Notify the main agent via followUp message. Uses a guard to prevent
+// sending while a previous followUp is still being processed.
+// A safety timeout resets the guard after 10s to prevent lockups.
+// Errors are silently swallowed since this is best-effort background polling.
 function notifyAgent(pi: ExtensionAPI, message: string, _type: "info" | "warning" | "error" = "info") {
   const send = pi.sendUserMessage;
   if (typeof send !== "function") return;
-  const promise = send(`[RM-NOTIFICATION] ${message}`, { deliverAs: "followUp" });
-  if (promise && typeof promise.catch === "function") {
-    promise.catch(() => {});
+  if (followUpPending) return;  // don't stack followUps
+  followUpPending = true;
+  followUpTimeout = setTimeout(resetFollowUpGuard, 10_000);
+  try {
+    const promise = send(`[RM-NOTIFICATION] ${message}`, { deliverAs: "followUp" });
+    if (promise && typeof promise.catch === "function") {
+      promise
+        .then(resetFollowUpGuard)
+        .catch(resetFollowUpGuard);
+    } else {
+      resetFollowUpGuard();
+    }
+  } catch {
+    resetFollowUpGuard();
   }
 }
 
@@ -152,10 +178,9 @@ export default function (pi: ExtensionAPI) {
   }
   const statusWatches = new Map<string, StatusWatch>();
 
-  // Debounce agent-settled notifications so "Ready for new orders" fires
-  // at most once in a MIN_READY_INTERVAL window, preventing spam when
-  // followUp notifications arrive in quick succession.
-  const MIN_READY_INTERVAL = 5_000;
+  // Debounce "Ready for new orders" so it fires at most once every 30s,
+  // and only when no workers are active (all done or no tasks).
+  const MIN_READY_INTERVAL = 30_000;
   let lastReadyNotification = 0;
 
   // Polling interval
@@ -282,27 +307,23 @@ export default function (pi: ExtensionAPI) {
   pi.on?.("session_start", (_event, ctx) => {
     mkdirSync(workersDir, { recursive: true });
     startPolling();
-    // Show on startup when nothing is queued — UI notification only, no agent processing.
-    if (typeof ctx.hasPendingMessages === "function" && !ctx.hasPendingMessages()) {
-      ctx.ui?.notify?.("Ready for new orders", "info");
-    }
   });
 
   pi.on?.("session_shutdown", () => {
     stopPolling();
   });
 
-  // When the agent finishes processing and becomes truly idle (no pending
-  // followUp or steer messages queued), signal readiness via UI notification.
-  // Uses ctx.ui.notify so the user sees it but the agent is NOT triggered.
-  // Debounced to at most once per MIN_READY_INTERVAL so rapid cycles don't spam.
+  // When the agent finishes processing and becomes truly idle with no workers
+  // active, signal readiness via a passive UI notification. Debounced to 30s.
   pi.on?.("agent_settled", (_event, ctx) => {
     const now = Date.now();
     if (now - lastReadyNotification < MIN_READY_INTERVAL) return;
-    if (ctx.isIdle() && (!ctx.hasPendingMessages || !ctx.hasPendingMessages())) {
-      lastReadyNotification = now;
-      ctx.ui?.notify?.("Ready for new orders", "info");
-    }
+    if (!ctx.isIdle()) return;
+    // Only notify when no workers are running
+    const tasks = listTasks();
+    if (tasks.length > 0) return;
+    lastReadyNotification = now;
+    ctx.ui?.notify?.("Ready for new orders", "info");
   });
 
   // --- Commands ---
@@ -625,6 +646,46 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool?.({
+    name: "rm_merge_task",
+    label: "Merge task branch",
+    description: "Merge a completed task's branch into the default branch (local git merge). Only call after the user explicitly confirms they want to merge.",
+    promptSnippet: "Merge the task branch into the default branch, once the user confirms.",
+    promptGuidelines: [
+      "ALWAYS ask the user for explicit confirmation before calling this.",
+      "Once merged, the worktree is destroyed — the branch's commits are now in the default branch.",
+      "The user still needs to push to the remote manually after the merge.",
+    ],
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task identifier to merge" }),
+    }),
+    async execute(_toolCallId, params) {
+      const { taskId } = params;
+      const herdrMeta = join(rmStateDir, "herdr", `${taskId}.meta`);
+      let projectDir = "";
+      if (existsSync(herdrMeta)) {
+        for (const line of readFileSync(herdrMeta, "utf8").split("\n")) {
+          if (line.startsWith("git_root=")) {
+            projectDir = line.slice(9).trim();
+            break;
+          }
+        }
+      }
+      const result = runBin("rm-merge.sh", [taskId, projectDir]);
+      if (result.ok) {
+        notifiedStatuses.delete(taskId);
+        return {
+          content: [{ type: "text", text: `Merge complete for task "${taskId}".\n\n${result.stdout}` }],
+          details: { taskId, merged: true, output: result.stdout },
+        };
+      }
+      return {
+        content: [{ type: "text", text: `Merge failed for task "${taskId}": ${result.stderr || result.stdout}` }],
+        details: { taskId, error: result.stderr || result.stdout },
+        isError: true,
+      };
+    },
+  });
 
   // --- Start polling on load ---
   mkdirSync(workersDir, { recursive: true });

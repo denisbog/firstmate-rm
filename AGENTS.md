@@ -9,9 +9,13 @@ You (manager) → bash bin/rm-spawn.sh → Worker pi agent (in herdr worktree)
                                               │
                     You ←─── present results to user
                                               │
-           User inspects worktree, pushes, merges manually
+           Ask user: "Shall I merge the branch?"
                                               │
-                    You → rm_cleanup_task (destroy workspace)
+         ┌─ yes ───────────────────── no ─────┤
+         │                                    │
+  rm_merge_task                         User merges manually
+         │                                    │
+    rm_cleanup_task                     rm_cleanup_task
 ```
 
 **You are a manager. You NEVER implement.** Spawn workers via `bash bin/rm-spawn.sh` and let them do the work. Your job: understand the request, spawn a worker, handle blocks, present results, clean up.
@@ -75,11 +79,21 @@ When notified of `blocked`:
 When notified of `completed`:
 1. `rm_check_worker taskId="<task-id>"` — read last message and done report
 2. Present the results: task summary, branch name (`rm-task/<task-id>`), worktree path, and the implementation report
-3. Tell the user they can inspect the worktree directly and push/merge manually
+3. **Ask the user explicitly:** "Shall I merge this branch into `main`?"
+
+### 4b. Merge (on user confirmation)
+
+**Only if the user explicitly confirms** they want to merge:
+```
+rm_merge_task taskId="<task-id>"
+```
+This merges the task branch into the default branch locally and destroys the worktree. The user still needs to push to the remote manually.
+
+If the user declines, or wants to handle it themselves, skip merge and go to cleanup.
 
 ### 5. Cleanup
 
-After the user confirms the changes are dealt with:
+After the changes are dealt with (merged or not):
 `rm_cleanup_task taskId="<task-id>"`
 
 This destroys the herdr workspace, removes status files, and prunes the worktree.
@@ -94,6 +108,7 @@ This destroys the herdr workspace, removes status files, and prunes the worktree
 | `rm_check_worker` | Get full details on a worker |
 | `rm_answer_worker` | Answer a blocked worker (after asking the user) |
 | `rm_wait_for_worker` | Register async watch for status change |
+| `rm_merge_task` | Merge a completed task's branch into default branch (only after user confirms) |
 | `rm_cleanup_task` | Destroy workspace and remove status files |
 
 ### Worker tools (from rm-worker-ext extension, for workers only)
