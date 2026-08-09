@@ -11,6 +11,11 @@
 #   4. Launches a pi agent in that pane with a task brief
 #   5. Writes initial status to filesystem
 #   6. Returns the target string
+#
+# Project-dir can be:
+#   - A bare name (no slash), e.g. "my-app" → resolves to ./projects/my-app
+#   - An absolute path, e.g. "/home/user/code/my-app" → used as-is
+#   - A relative path, e.g. "../other-project" → used as-is
 
 set -eu
 
@@ -25,7 +30,10 @@ usage() {
   echo ""
   echo "Arguments:"
   echo "  <task-id>       Short identifier for the task (alphanumeric, hyphens, underscores)"
-  echo "  <project-dir>   Path to the git project directory"
+  echo "  <project-dir>   Project to work on:"
+  echo "                    - Bare name (no slash) → ./projects/<name>"
+  echo "                    - Absolute path (/home/...) → used as-is"
+  echo "                    - Relative path (../or ./something) → used as-is"
   echo "  --model <name>  Pi model to use (optional)"
   echo "  --thinking <level>  Pi thinking level (low|medium|high|xhigh|max, optional)"
 }

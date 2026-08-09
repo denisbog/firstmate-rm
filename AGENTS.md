@@ -26,27 +26,57 @@ You (manager) → bash bin/rm-spawn.sh → Worker pi agent (in herdr worktree)
 
 **Rule 2 — No polling:** NEVER use `sleep` + `cat`/`bash` to poll status. The `rm-watch` extension polls every 2s and notifies you via followUp. Use its tools instead (see below).
 
+## Two ways to reference a project
+
+firstmate-rm supports **two modes** for specifying which project to work on:
+
+| Mode | Syntax | Example | Description |
+|------|--------|---------|-------------|
+| **Managed** (projects dir) | Bare name (no slash) | `my-app` | Resolves to `./projects/<name>`. Clone or init there first. |
+| **Local path** | Absolute or relative path (with slash) | `/home/user/code/my-app` or `../other-project` | Used as-is on the filesystem. The project must already exist. |
+
+**When to use which:**
+- Use **managed** for repos you own and want to store centrally under firstmate-rm.
+- Use **local path** to work on projects that already live elsewhere on your machine.
+
 ## Correct spawn pattern (memorize this)
 
+### Managed project
 ```bash
-# 1. Spawn (returns immediately):
-bash bin/rm-spawn.sh <task-id> <project-dir> "<description>"
+# 1. Ensure project exists (one-time setup):
+bash bin/rm-git-ensure.sh <name> <git-url>
+
+# 2. Spawn (returns immediately):
+bash bin/rm-spawn.sh <task-id> <name> "<description>"
+
+# 3. Register async watch (returns in <1s):
+rm_wait_for_worker taskId="<task-id>" targetStatus="completed"
+
+# 4. STOP. Tell the user the worker was spawned.
+```
+
+### Local file path
+```bash
+# 1. Spawn directly with an absolute/relative path (returns immediately):
+bash bin/rm-spawn.sh <task-id> /path/to/existing-project "<description>"
 
 # 2. Register async watch (returns in <1s):
-#    rm_wait_for_worker taskId="<task-id>" targetStatus="completed"
+rm_wait_for_worker taskId="<task-id>" targetStatus="completed"
 
-# 3. STOP. Tell the user the worker was spawned. The extension
-#    will notify you when status changes.
+# 3. STOP. Tell the user the worker was spawned.
 ```
 
 ## Workflow
 
 ### Setup: Ensure the project exists
 
-All projects live under `./projects/` (bare name → `./projects/<name>`). If the project doesn't exist yet:
-
+**Managed projects** (bare names — no slash):
 - **Clone an existing repo:** `bash bin/rm-git-ensure.sh <name> <git-url>`
 - **Start a fresh local repo:** `mkdir -p ./projects/<name> && cd $_ && git init && git checkout -b main && git commit --allow-empty -m "init"`
+
+**Local file path** (absolute or relative path with a slash):
+- The project must already exist at that path as a git repository.
+- Pass the path directly to `rm-spawn.sh`.
 
 ### 1. Understand the request
 
@@ -57,7 +87,8 @@ Clarify which project, what needs to be done, and any constraints. **Do not** re
 ```bash
 bash bin/rm-spawn.sh <task-id> <project-dir> "<clear task description>"
 ```
-Bare names resolve to `./projects/<name>`. Absolute paths used as-is.
+- **Bare names** (no slash, e.g. `my-app`) resolve to `./projects/<name>`.
+- **Absolute or relative paths** (e.g. `/home/user/my-app` or `../../other-app`) are used as-is.
 
 Then invoke:
 ```
